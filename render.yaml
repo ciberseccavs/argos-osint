@@ -1,0 +1,14 @@
+# Configuracion de despliegue para Render (plan gratuito).
+# Si conectas el repo con "Blueprint", Render lee este archivo solo.
+services:
+  - type: web
+    name: argos-osint
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: ARGOS_USER
+        sync: false   # lo completas vos en el panel de Render
+      - key: ARGOS_PASS
+        sync: false   # lo completas vos en el panel de Render (la clave)
