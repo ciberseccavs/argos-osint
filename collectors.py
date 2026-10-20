@@ -656,8 +656,10 @@ def cierre_investigacion(tipo: str, resultados: list[dict]) -> dict:
             decision = ("Tratar como sospechoso: no compartir datos ni devolver la "
                         "llamada hasta verificar por un canal independiente.")
         else:
-            decision = ("Sin senales negativas automaticas. Igual, no compartas datos "
-                        "sensibles y verifica reportes antes de confiar.")
+            decision = ("IMPORTANTE: que el numero sea valido NO quiere decir que sea "
+                        "seguro (los estafadores usan lineas validas). Revisa los enlaces "
+                        "de 'reportes comunitarios' mas abajo: ahi aparecen las denuncias. "
+                        "No compartas datos sensibles por telefono.")
 
     elif tipo == "email":
         d = _dato(resultados, "email")
@@ -739,8 +741,10 @@ def cierre_investigacion(tipo: str, resultados: list[dict]) -> dict:
         "todavia_no_sabemos": no_sabemos,
         "decision_prudente": decision,
         "nivel_confianza": confianza,
-        "nota": ("La ausencia de rastro no es, por si sola, senal de riesgo. "
-                 "'No pude corroborarlo' suele ser mas exacto que 'es falso'."),
+        "nota": ("La certeza mide cuan solidos son los DATOS hallados, NO si el contacto "
+                 "es confiable: un dato valido no implica que sea seguro. La ausencia de "
+                 "rastro tampoco es, por si sola, senal de riesgo; 'no pude corroborarlo' "
+                 "suele ser mas exacto que 'es falso'."),
     }
 
 

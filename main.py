@@ -76,10 +76,9 @@ PAGINA = """<!doctype html>
   .col ul { margin:4px 0 0; padding-left:18px; }
   .col li { font-size:13px; line-height:1.5; margin:2px 0; }
   .sost { color:#cbd5e1; } .nose { color:#fbbf24; } .deci { color:#e2e8f0; }
-  .conf { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; }
-  .conf-Alto { background:#14532d; color:#86efac; }
-  .conf-Medio { background:#78350f; color:#fcd34d; }
-  .conf-Bajo { background:#3f1d1d; color:#fca5a5; }
+  /* Badge NEUTRO a proposito: mide certeza del dato, NO seguridad del contacto. */
+  .conf { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px;
+          font-weight:700; background:#1e3a5f; color:#93c5fd; }
   .notea { font-size:12px; color:#94a3b8; font-style:italic; margin-top:8px; }
   .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
   .flag { width: 40px; height: 26px; border-radius: 4px; flex: 0 0 auto;
@@ -176,8 +175,9 @@ function renderLista(arr, cls){
 
 function renderCierre(c){
   let h = '<div class="cierre"><h3>Cierre de la investigacion ' +
-          '<span class="conf conf-' + esc(c.nivel_confianza) + '">Confianza: ' +
-          esc(c.nivel_confianza) + '</span></h3>';
+          '<span class="conf">Certeza del dato: ' + esc(c.nivel_confianza) + '</span></h3>' +
+          '<div class="notea">La certeza mide cuan solidos son los datos hallados, ' +
+          'NO si el contacto es confiable.</div>';
   h += '<div class="col"><b>Podemos sostener</b>' + renderLista(c.podemos_sostener,'sost') + '</div>';
   h += '<div class="col"><b>Todavia no sabemos</b>' + renderLista(c.todavia_no_sabemos,'nose') + '</div>';
   h += '<div class="col"><b>Decision prudente</b><div class="deci">' + esc(c.decision_prudente) + '</div></div>';
