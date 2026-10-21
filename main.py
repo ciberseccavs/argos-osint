@@ -34,7 +34,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 ARGOS_USER = os.environ.get("ARGOS_USER", "argos")
 ARGOS_PASS = os.environ.get("ARGOS_PASS", "")
 
-TIPOS = ["ip", "domain", "email", "username", "phone", "person"]
+TIPOS = ["ip", "domain", "email", "username", "phone", "person", "cbu", "url"]
 
 # --------------------------------------------------------------------------- #
 # Auditoria: registra quien consulto que y cuando (rendicion de cuentas).
@@ -109,6 +109,17 @@ PAGINA = """<!doctype html>
   .conf { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px;
           font-weight:700; background:#1e3a5f; color:#93c5fd; }
   .notea { font-size:12px; color:#94a3b8; font-style:italic; margin-top:8px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .mini { width:auto; margin:0; padding:7px 12px; font-size:13px; background:#334155; }
+  .mini:hover { background:#475569; }
+  @media print {
+    body { background:#fff; color:#000; }
+    #formulario, .toolbar, .hint, .tag { display:none !important; }
+    .card, .cierre { background:#fff !important; border-color:#bbb; }
+    .arg { color:#1e40af; } .nose { color:#92400e; } .empty { color:#555; }
+    .k { color:#1e3a8a; } .lnk { color:#1e3a8a; }
+    .conf { background:#e5e7eb; color:#1e3a8a; }
+  }
   .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
   .flag { width: 40px; height: 26px; border-radius: 4px; flex: 0 0 auto;
           box-shadow: 0 0 0 1px #334155; }
@@ -141,11 +152,11 @@ PAGINA = """<!doctype html>
   <p class="sub">Inteligencia preventiva de fuentes abiertas — publicas, gratuitas y sin registro.
      &nbsp;·&nbsp; <a href="/logs" style="color:#64748b">Auditoría</a></p>
 
-  <div class="card">
+  <div class="card" id="formulario">
     <div class="row">
       <div>
         <label>Dato a consultar</label>
-        <input id="target" placeholder="ej: google.com  /  8.8.8.8  /  +5491150501234"
+        <input id="target" placeholder="dominio / IP / email / telefono / nombre / CBU / link"
                autocomplete="off">
       </div>
       <div>
@@ -158,6 +169,8 @@ PAGINA = """<!doctype html>
           <option value="username">Usuario</option>
           <option value="phone">Telefono</option>
           <option value="person">Nombre y apellido</option>
+          <option value="cbu">CBU / CVU</option>
+          <option value="url">Link / URL</option>
         </select>
       </div>
     </div>
@@ -167,6 +180,10 @@ PAGINA = """<!doctype html>
   </div>
 
   <div class="card" id="salida" style="display:none">
+    <div class="toolbar">
+      <button class="mini" onclick="imprimir()">🖨 Imprimir / Guardar PDF</button>
+      <button class="mini" onclick="descargarJSON()">⬇ Descargar (JSON)</button>
+    </div>
     <div id="meta"></div>
     <div class="res" id="res"></div>
   </div>
@@ -224,11 +241,31 @@ function renderSeccion(titulo, obj){
   return out.join('\\n');
 }
 
+function imprimir(){ window.print(); }
+
+function descargarJSON(){
+  if(!window.ultimoReporte) return;
+  const r = window.ultimoReporte;
+  const blob = new Blob([JSON.stringify(r,null,2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const t = String(r.entrada||'reporte').replace(/[^a-zA-Z0-9]+/g,'_').slice(0,40);
+  a.download = 'ARGos_'+t+'.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+}
+
 function render(rep){
+  window.ultimoReporte = rep;
   const meta = document.getElementById('meta');
   meta.innerHTML = '<b>Entrada:</b> ' + esc(rep.entrada) +
                    ' &nbsp; <b>Tipo detectado:</b> ' + esc(rep.tipo_detectado);
   if (rep.ips_resueltas) meta.innerHTML += ' &nbsp; <b>IPs:</b> ' + esc(rep.ips_resueltas.join(', '));
+  if (rep.fecha_consulta_utc){
+    let f = rep.fecha_consulta_utc;
+    try { f = new Date(rep.fecha_consulta_utc).toLocaleString(); } catch(e){}
+    meta.innerHTML += '<div class="notea">Consulta realizada: ' + esc(f) + '</div>';
+  }
 
   const out = [];
   if (rep.cierre_investigacion) out.push(renderCierre(rep.cierre_investigacion));

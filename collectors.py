@@ -113,8 +113,15 @@ def detect_type(value: str) -> str:
             return "ip"
         except OSError:
             pass
+    # CBU / CVU: 22 digitos (puede venir con espacios/guiones)
+    _solo_dig = re.sub(r"[\s\-.]", "", value)
+    if _solo_dig.isdigit() and len(_solo_dig) == 22:
+        return "cbu"
     if "@" in value and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
         return "email"
+    # Link / URL completa (con esquema http(s):// o con ruta tras el dominio)
+    if re.match(r"^https?://", value, re.I) or re.match(r"^[^\s/]+\.[^\s/]+/\S", value):
+        return "url"
     # Telefono antes que dominio/usuario (numeros con + o 7-15 digitos)
     if _looks_phone(value):
         return "phone"
@@ -501,6 +508,121 @@ def phone_info(value: str, default_region: str = DEFAULT_PHONE_REGION) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Validador de CBU / CVU (offline) + identificacion de la entidad
+# --------------------------------------------------------------------------- #
+# Codigos de entidad del BCRA (referencial; confirmar en la nomina oficial).
+BANCOS = {
+    "007": "Banco de Galicia", "011": "Banco de la Nacion Argentina",
+    "014": "Banco de la Provincia de Buenos Aires", "015": "ICBC",
+    "016": "Citibank", "017": "BBVA Argentina",
+    "020": "Banco de la Provincia de Cordoba", "027": "Banco Supervielle",
+    "029": "Banco Ciudad de Buenos Aires", "034": "Banco Patagonia",
+    "044": "Banco Hipotecario", "072": "Banco Santander Argentina",
+    "083": "Banco del Chubut", "086": "Banco de Santa Cruz",
+    "093": "Banco de La Pampa", "094": "Banco de Corrientes",
+    "097": "Banco Provincia del Neuquen", "143": "Brubank",
+    "147": "Banco Interfinanzas", "150": "HSBC Bank Argentina",
+    "191": "Banco Credicoop", "259": "Banco Itau Argentina",
+    "285": "Banco Macro", "299": "Banco Comafi", "300": "BICE",
+    "311": "Nuevo Banco del Chaco", "321": "Banco de Santiago del Estero",
+    "322": "Banco Industrial (BIND)", "330": "Nuevo Banco de Santa Fe",
+    "386": "Nuevo Banco de Entre Rios", "389": "Banco Columbia",
+}
+
+# Billeteras virtuales (CVU): se identifican por el prefijo de 7 digitos
+# (entidad 000 + sucursal del PSP). Referencial; se amplia a medida que se confirman.
+PSP_CVU = {
+    "0000003": "Mercado Pago",
+}
+
+
+def _dv_bloque(digitos: str, pesos: list[int]) -> int:
+    suma = sum(int(d) * p for d, p in zip(digitos, pesos))
+    return (10 - (suma % 10)) % 10
+
+
+def cbu_info(value: str) -> dict:
+    """Valida un CBU/CVU (22 digitos) con sus digitos verificadores e identifica
+    la entidad por el codigo. Todo offline (es matematica + una tabla)."""
+    num = re.sub(r"[\s\-.]", "", value)
+    if not (num.isdigit() and len(num) == 22):
+        return {"source": "CBU/CVU", "ok": False,
+                "error": "No parece un CBU/CVU: deben ser 22 digitos."}
+    b1, b2 = num[:8], num[8:]
+    dv1_ok = _dv_bloque(b1[:7], [7, 1, 3, 9, 7, 1, 3]) == int(b1[7])
+    dv2_ok = _dv_bloque(b2[:13], [3, 9, 7, 1, 3, 9, 7, 1, 3, 9, 7, 1, 3]) == int(b2[13])
+    valido = dv1_ok and dv2_ok
+    entidad = num[:3]
+    if entidad == "000":  # CVU de billetera virtual
+        es_cvu = True
+        entidad_nombre = PSP_CVU.get(num[:7]) or "billetera virtual (CVU) - PSP no identificado"
+    else:
+        es_cvu = False
+        entidad_nombre = BANCOS.get(entidad) or f"codigo {entidad} no identificado (verifica en la nomina del BCRA)"
+    data = {
+        "valido": valido,
+        "entidad_codigo": entidad,
+        "entidad": entidad_nombre,
+        "sucursal": num[3:7],
+        "tipo": "CVU (billetera virtual)" if es_cvu else "CBU (cuenta bancaria)",
+        "nota": ("La validez confirma que el numero esta bien formado y a que entidad "
+                 "pertenece. NO confirma el titular de la cuenta ni que sea de fiar. "
+                 "La tabla de entidades es referencial: ante la duda, confirma con el BCRA."),
+    }
+    return {"source": "CBU/CVU (offline)", "ok": True, "data": data}
+
+
+# --------------------------------------------------------------------------- #
+# Analizador de links / URL (anti-phishing, offline)
+# --------------------------------------------------------------------------- #
+_SHORTENERS = {"bit.ly", "tinyurl.com", "cutt.ly", "goo.gl", "t.co", "ow.ly",
+               "is.gd", "acortar.link", "rebrand.ly", "shorturl.at", "t.ly", "rb.gy"}
+_TLDS_SOSPECHOSOS = {"zip", "mov", "top", "xyz", "click", "country", "gq", "tk",
+                     "ml", "cf", "ga", "work", "rest", "fit", "loan", "review", "cam"}
+_MARCAS = ("banco", "bank", "gob", "gov", "afip", "arca", "mercado", "pago",
+           "bcra", "anses", "visa", "mastercard", "paypal")
+
+
+def analyze_url(value: str) -> dict:
+    raw = value.strip()
+    con_esquema = bool(re.match(r"^[a-zA-Z][\w+.\-]*://", raw))
+    parsed = urllib.parse.urlparse(raw if con_esquema else "http://" + raw)
+    host = (parsed.hostname or "").lower()
+    labels = host.split(".") if host else []
+    tld = labels[-1] if labels else ""
+    señales = []
+
+    if con_esquema and parsed.scheme == "http":
+        señales.append("Usa http (sin cifrado). Un sitio serio usa https.")
+    if "@" in (parsed.netloc or ""):
+        señales.append("Tiene '@' en la direccion: truco para ocultar el destino real.")
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        señales.append("El destino es una IP, no un dominio: inusual y sospechoso.")
+    if host.startswith("xn--") or ".xn--" in host:
+        señales.append("Dominio con punycode (xn--): posible imitacion con letras parecidas.")
+    if len(labels) >= 5:
+        señales.append(f"Muchos subdominios ({len(labels)} niveles): comun en phishing.")
+    if len(host) > 40:
+        señales.append("Host muy largo: tactica para disimular el dominio real.")
+    if host in _SHORTENERS:
+        señales.append("Es un acortador: oculta a donde te lleva realmente.")
+    if tld in _TLDS_SOSPECHOSOS:
+        señales.append(f"Dominio .{tld}: TLD muy usado en fraudes (no es prueba, pero suma sospecha).")
+    dominio_base = ".".join(labels[-2:]) if len(labels) >= 2 else host
+    if any(m in host for m in _MARCAS) and not any(m in dominio_base for m in _MARCAS):
+        señales.append("Usa el nombre de una marca conocida en el subdominio, no en el dominio real: tipico imitador.")
+
+    data = {
+        "host": host or "(no se pudo leer)",
+        "dominio_base": dominio_base,
+        "esquema": parsed.scheme,
+        "señales_phishing": señales or ["Sin señales automaticas de phishing. Igual, no "
+                                        "ingreses datos ni claves si el link llego sin que lo esperaras."],
+    }
+    return {"source": "analisis de link (anti-phishing)", "ok": True, "data": data}
+
+
+# --------------------------------------------------------------------------- #
 # Wayback Machine (archive.org) - API gratuita y sin registro
 # --------------------------------------------------------------------------- #
 async def wayback_machine(client: httpx.AsyncClient, value: str) -> dict:
@@ -555,6 +677,11 @@ def google_dorks(value: str, tipo: str) -> dict:
     elif tipo == "ip":
         d["IP entre comillas"] = _g(f'"{v}"')
         d["IP en reportes de abuso"] = _g(f'"{v}" (abuse OR blacklist OR malware)')
+    elif tipo == "cbu":
+        pass  # un CBU no se busca en Google
+    elif tipo == "url":
+        host = urllib.parse.urlparse(v if re.match(r"^https?://", v, re.I) else "http://" + v).hostname or v
+        d["El dominio en Google (reportes)"] = _g(f'"{host}" (estafa OR phishing OR fraude OR scam)')
     elif tipo == "person":
         # LinkedIn primero: el dork site:linkedin.com/in es la forma mas efectiva
         # SIN login de encontrar el perfil publico de una persona.
@@ -595,21 +722,29 @@ def fuentes_oficiales(tipo: str, value: str) -> dict:
 # Enlaces de verificacion (herramientas que recomienda el libro)
 # --------------------------------------------------------------------------- #
 def enlaces_verificacion(tipo: str, value: str) -> dict:
-    enlaces: dict[str, Any] = {
-        "Imagen (busqueda inversa)": {
+    enlaces: dict[str, Any] = {}
+    # Imagen/video/mapas solo tienen sentido cuando hay una persona o una foto detras.
+    if tipo in ("person", "username", "email", "phone"):
+        enlaces["Imagen (busqueda inversa)"] = {
             "Google Lens": "https://lens.google.com",
             "Yandex Images (mejor para rostros)": "https://yandex.com/images",
             "TinEye (antiguedad de una foto)": "https://tineye.com",
-        },
-        "Video (verificacion de fotogramas)": {
+        }
+        enlaces["Video (verificacion de fotogramas)"] = {
             "InVID-WeVerify": "https://www.invid-project.eu/tools-and-services/invid-verification-plugin/",
-        },
-        "Mapas (geolocalizacion de fotos)": {
+        }
+        enlaces["Mapas (geolocalizacion de fotos)"] = {
             "Google Maps": "https://www.google.com/maps",
             "Google Earth": "https://earth.google.com/web/",
             "OpenStreetMap": "https://www.openstreetmap.org",
-        },
-    }
+        }
+    if tipo == "url":
+        host = urllib.parse.urlparse(
+            value if re.match(r"^https?://", value, re.I) else "http://" + value).hostname or value
+        enlaces["Analisis del link (gratis, sin instalar)"] = {
+            "urlscan.io (que hace la pagina)": f"https://urlscan.io/search/#{urllib.parse.quote(host)}",
+            "VirusTotal (reputacion de la URL)": "https://www.virustotal.com/gui/home/url",
+        }
     if tipo == "email":
         enlaces["Email (brechas de datos)"] = {
             "Have I Been Pwned (revisa manualmente)": "https://haveibeenpwned.com",
@@ -730,6 +865,45 @@ def cierre_investigacion(tipo: str, resultados: list[dict]) -> dict:
                           "no domicilio).")
         decision = "Dato de infraestructura. Interpreta la ubicacion como del servidor/red, no de una persona."
 
+    elif tipo == "cbu":
+        d = _dato(resultados, "CBU/CVU")
+        if d:
+            if d.get("valido"):
+                sostener.append(f"{d.get('tipo')} VALIDO (digitos verificadores correctos).")
+                sostener.append(f"Entidad: {d.get('entidad')} (codigo {d.get('entidad_codigo')}).")
+                confianza = "Alto"
+            else:
+                sostener.append("El CBU/CVU NO es valido (los digitos verificadores no cierran): "
+                                "esta mal copiado o es inventado.")
+                confianza = "Alto"
+        no_sabemos.append("El titular de la cuenta (no es dato de fuente abierta).")
+        if d.get("valido"):
+            decision = ("Que sea valido confirma el numero y el banco, NO al titular ni que sea "
+                        "de fiar. Antes de transferir, confirma con la persona por un canal que "
+                        "vos inicies (no el que te pasaron).")
+        else:
+            decision = ("No transferir: el numero no es valido. Pedi que te lo confirmen bien "
+                        "por un canal seguro.")
+
+    elif tipo == "url":
+        d = _dato(resultados, "analisis de link")
+        señ = d.get("señales_phishing", []) if d else []
+        hay = señ and not señ[0].startswith("Sin señales")
+        if d:
+            sostener.append(f"Destino real del link: {d.get('host')} (dominio {d.get('dominio_base')}).")
+        if hay:
+            for s in señ:
+                no_sabemos.append("Señal: " + s)
+            decision = ("Varias señales de phishing: NO ingreses datos ni claves y no descargues "
+                        "nada. Si dice ser tu banco/organismo, entra escribiendo vos la direccion "
+                        "oficial, nunca desde este link.")
+            confianza = "Alto"
+        else:
+            no_sabemos.append("Si el contenido del sitio es legitimo (esto es analisis del link, no del contenido).")
+            decision = ("Sin señales automaticas, pero igual: no ingreses datos si el link llego "
+                        "sin que lo esperaras. Verifica el sitio por la via oficial.")
+            confianza = "Medio"
+
     elif tipo == "person":
         sostener.append("ARGos no reconstruye el perfil de la persona: te entrega busquedas "
                         "y enlaces (LinkedIn, documentos, redes) para que verifiques vos.")
@@ -782,6 +956,10 @@ async def investigate(value: str, forzar_tipo: str | None = None) -> dict:
     if tipo == "phone":
         # Telefono: offline, sin cliente HTTP.
         reporte["resultados"] = [await asyncio.to_thread(phone_info, value)]
+    elif tipo == "cbu":
+        reporte["resultados"] = [cbu_info(value)]
+    elif tipo == "url":
+        reporte["resultados"] = [analyze_url(value)]
     elif tipo == "person":
         # Modo persona: busqueda asistida, sin consultar datos de la persona.
         reporte["resultados"] = [{
@@ -822,4 +1000,5 @@ async def investigate(value: str, forzar_tipo: str | None = None) -> dict:
     reporte["google_dorks"] = google_dorks(value, tipo)
     reporte["fuentes_oficiales"] = fuentes_oficiales(tipo, value)
     reporte["enlaces_verificacion"] = enlaces_verificacion(tipo, value)
+    reporte["fecha_consulta_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return reporte
