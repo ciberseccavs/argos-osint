@@ -98,6 +98,18 @@ PAGINA = """<!doctype html>
   .k { color: #93c5fd; }
   .empty { color: #64748b; }
   .lnk { color: #38bdf8; text-decoration: underline; word-break: break-all; }
+  .guia { background:#131d30; border:1px solid #334155; border-radius:12px; padding:0 16px; margin-bottom:18px; }
+  .guia summary { cursor:pointer; padding:14px 0; font-weight:600; color:#cbd5e1; list-style:none; }
+  .guia summary::-webkit-details-marker { display:none; }
+  .guia summary::before { content:"▸ "; color:#64748b; }
+  .guia[open] summary::before { content:"▾ "; }
+  .guia-body { padding:0 0 14px; font-size:13.5px; line-height:1.6; color:#cbd5e1; }
+  .guia-body p { margin:8px 0; } .guia-body ul { margin:6px 0; padding-left:20px; }
+  .guia-body li { margin:3px 0; }
+  .guia code { background:#0f172a; border:1px solid #334155; border-radius:5px; padding:1px 6px; font-size:12.5px; color:#93c5fd; }
+  .flujo { background:#0f172a; border:1px dashed #475569; border-radius:8px; padding:10px 12px; margin:10px 0; font-size:13px; color:#e2e8f0; }
+  .flujo b { color:#93c5fd; }
+  .guia-nota { background:#1e293b; border-left:3px solid #74acdf; border-radius:6px; padding:8px 10px; font-size:12.5px; color:#94a3b8; }
   .cierre { background:#172033; border:1px solid #334155; border-radius:10px; padding:14px; margin:6px 0 16px; }
   .cierre h3 { margin:0 0 8px; font-size:15px; }
   .col { margin:8px 0; }
@@ -178,6 +190,24 @@ PAGINA = """<!doctype html>
     <p class="hint">Para telefonos usa formato internacional con +codigo de pais
        (ej: +5491150501234). La consulta puede tardar unos segundos.</p>
   </div>
+
+  <details class="guia" open>
+    <summary>¿Cómo se usa? — guía rápida</summary>
+    <div class="guia-body">
+      <div class="flujo">Pegás el dato &nbsp;→&nbsp; <b>Consultar</b> &nbsp;→&nbsp; leés el <b>Cierre</b> &nbsp;→&nbsp; mirás las <b>ayudas</b> &nbsp;→&nbsp; <b>Exportás</b> (si hace falta)</div>
+      <p><b>1.</b> Pegá un dato en el cuadro de arriba y tocá <b>Consultar</b>. ARGos detecta solo de qué se trata (o elegís el tipo en el menú).</p>
+      <p><b>Qué podés consultar:</b></p>
+      <ul>
+        <li>📞 Teléfono: <code>+5491150501234</code> &nbsp;·&nbsp; 🏦 CBU/CVU: <code>0110599500000012345674</code></li>
+        <li>🌐 Dominio: <code>bcra.gob.ar</code> &nbsp;·&nbsp; 🔗 Link sospechoso: <code>http://sitio-raro.xyz/login</code></li>
+        <li>✉️ Email: <code>alguien@dominio.com</code> &nbsp;·&nbsp; 🧑 Nombre: <code>Juan Pérez</code> &nbsp;·&nbsp; 🖥️ IP: <code>8.8.8.8</code></li>
+      </ul>
+      <p><b>2.</b> Leé el <b>Cierre de la investigación</b>: lo que <i>podemos sostener</i>, lo que <i>todavía no sabemos</i> y la <i>decisión prudente</i>.</p>
+      <p><b>3.</b> Bajá a las <b>ayudas</b>: búsquedas en Google, fuentes oficiales y enlaces de verificación (imágenes, reportes, etc.).</p>
+      <p><b>4.</b> Para dejar constancia, usá <b>🖨 Imprimir / PDF</b> o <b>⬇ Descargar (JSON)</b> — queda con fecha y hora.</p>
+      <p class="guia-nota">⚖️ ARGos es para <b>verificar y prevenir</b> con datos públicos. Entrega <b>indicios para decidir, no veredictos</b>, y no sirve para perfilar personas (es la línea que mantiene el uso del lado legal).</p>
+    </div>
+  </details>
 
   <div class="card" id="salida" style="display:none">
     <div class="toolbar">
