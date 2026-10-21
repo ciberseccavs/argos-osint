@@ -121,6 +121,9 @@ def detect_type(value: str) -> str:
     # Dominio: tiene un punto, sin espacios y TLD alfabetico
     if re.match(r"^(?!-)[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63})+$", value):
         return "domain"
+    # Persona: dos o mas palabras alfabeticas (nombre y apellido)
+    if re.match(r"^[A-Za-zÀ-ÿ'’.\-]+(?:\s+[A-Za-zÀ-ÿ'’.\-]+)+$", value):
+        return "person"
     return "username"
 
 
@@ -552,15 +555,19 @@ def google_dorks(value: str, tipo: str) -> dict:
     elif tipo == "ip":
         d["IP entre comillas"] = _g(f'"{v}"')
         d["IP en reportes de abuso"] = _g(f'"{v}" (abuse OR blacklist OR malware)')
-    else:  # username o nombre de persona
-        if " " in v:  # parece un nombre y apellido
-            d["Nombre exacto"] = _g(f'"{v}"')
-            d["Nombre en LinkedIn"] = _g(f'"{v}" site:linkedin.com')
-            d["Nombre en documentos"] = _g(f'"{v}" (filetype:pdf OR filetype:doc OR filetype:xls)')
-            d["Nombre excluyendo ruido (edita el -)"] = _g(f'"{v}" -wikipedia')
-        else:
-            d["Usuario exacto"] = _g(f'"{v}"')
-            d["Usuario en foros/redes"] = _g(f'"{v}" (site:reddit.com OR site:github.com OR site:x.com OR site:instagram.com)')
+    elif tipo == "person":
+        # LinkedIn primero: el dork site:linkedin.com/in es la forma mas efectiva
+        # SIN login de encontrar el perfil publico de una persona.
+        d["LinkedIn - perfil de la persona"] = _g(f'site:linkedin.com/in "{v}"')
+        d["LinkedIn - menciones"] = _g(f'"{v}" site:linkedin.com')
+        d["Nombre exacto"] = _g(f'"{v}"')
+        d["En documentos (PDF/Word/Excel)"] = _g(f'"{v}" (filetype:pdf OR filetype:doc OR filetype:xls)')
+        d["En redes sociales"] = _g(f'"{v}" (site:instagram.com OR site:facebook.com OR site:x.com)')
+        d["Agregar ciudad/profesion (edita el texto)"] = _g(f'"{v}" (Argentina OR Buenos Aires)')
+        d["Excluir homonimos (edita el -)"] = _g(f'"{v}" -wikipedia')
+    else:  # username (un solo alias)
+        d["Usuario exacto"] = _g(f'"{v}"')
+        d["Usuario en foros/redes"] = _g(f'"{v}" (site:reddit.com OR site:github.com OR site:x.com OR site:instagram.com)')
     return d
 
 
@@ -614,6 +621,12 @@ def enlaces_verificacion(tipo: str, value: str) -> dict:
     elif tipo == "username":
         enlaces["Usuario (presencia)"] = {
             "WhatsMyName": "https://whatsmyname.app",
+        }
+    elif tipo == "person":
+        enlaces["Persona (perfiles)"] = {
+            "LinkedIn - busqueda de personas":
+                f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(value)}",
+            "WhatsMyName (si tenes un alias)": "https://whatsmyname.app",
         }
     return enlaces
 
@@ -717,6 +730,16 @@ def cierre_investigacion(tipo: str, resultados: list[dict]) -> dict:
                           "no domicilio).")
         decision = "Dato de infraestructura. Interpreta la ubicacion como del servidor/red, no de una persona."
 
+    elif tipo == "person":
+        sostener.append("ARGos no reconstruye el perfil de la persona: te entrega busquedas "
+                        "y enlaces (LinkedIn, documentos, redes) para que verifiques vos.")
+        no_sabemos.append("Todo lo que surja son INDICIOS: que coincida el nombre no prueba "
+                          "la identidad (hay homonimos).")
+        decision = ("Usar solo para verificacion legitima y puntual (p. ej. corroborar a un "
+                    "candidato o contraparte), NUNCA para perfilar. Confirma por verificacion "
+                    "cruzada y respeta la Ley 25.326.")
+        confianza = "Bajo"
+
     else:  # username
         d = _dato(resultados, "presencia de usuario")
         encontrados = d.get("encontrados", []) if d else []
@@ -759,6 +782,14 @@ async def investigate(value: str, forzar_tipo: str | None = None) -> dict:
     if tipo == "phone":
         # Telefono: offline, sin cliente HTTP.
         reporte["resultados"] = [await asyncio.to_thread(phone_info, value)]
+    elif tipo == "person":
+        # Modo persona: busqueda asistida, sin consultar datos de la persona.
+        reporte["resultados"] = [{
+            "source": "modo persona (busqueda asistida)", "ok": True, "data": {
+                "nota": ("ARGos no consulta ni almacena datos de la persona. Te arma las "
+                         "busquedas y enlaces (abajo) para que verifiques vos, de forma "
+                         "legitima y puntual. Trata todo como indicios, no como prueba."),
+            }}]
     else:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             if tipo == "ip":

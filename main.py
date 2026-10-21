@@ -16,7 +16,10 @@ import asyncio
 import base64
 import json
 import os
+import sqlite3
+import threading
 import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import collectors
@@ -31,7 +34,33 @@ PORT = int(os.environ.get("PORT", "8000"))
 ARGOS_USER = os.environ.get("ARGOS_USER", "argos")
 ARGOS_PASS = os.environ.get("ARGOS_PASS", "")
 
-TIPOS = ["ip", "domain", "email", "username", "phone"]
+TIPOS = ["ip", "domain", "email", "username", "phone", "person"]
+
+# --------------------------------------------------------------------------- #
+# Auditoria: registra quien consulto que y cuando (rendicion de cuentas).
+# NOTA sobre persistencia: en el plan gratuito de Render el disco es efimero
+# (se reinicia al redesplegar o al dormirse). Para auditoria PERMANENTE hace
+# falta un disco pago o una base externa; ver ARGOS_DB abajo.
+# --------------------------------------------------------------------------- #
+DB_PATH = os.environ.get("ARGOS_DB", "argos_audit.db")
+_db_lock = threading.Lock()
+_db = sqlite3.connect(DB_PATH, check_same_thread=False)
+_db.execute("""CREATE TABLE IF NOT EXISTS auditoria (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha_utc TEXT, usuario TEXT, tipo TEXT, dato TEXT, origen TEXT)""")
+_db.commit()
+
+
+def registrar_auditoria(usuario, tipo, dato, origen):
+    try:
+        with _db_lock:
+            _db.execute(
+                "INSERT INTO auditoria (fecha_utc, usuario, tipo, dato, origen) VALUES (?,?,?,?,?)",
+                (datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 usuario, tipo or "", dato, origen))
+            _db.commit()
+    except Exception:
+        pass
 
 PAGINA = """<!doctype html>
 <html lang="es">
@@ -109,7 +138,8 @@ PAGINA = """<!doctype html>
     </svg>
     <h1><span class="arg">ARG</span>os</h1>
   </div>
-  <p class="sub">Inteligencia preventiva de fuentes abiertas — publicas, gratuitas y sin registro.</p>
+  <p class="sub">Inteligencia preventiva de fuentes abiertas — publicas, gratuitas y sin registro.
+     &nbsp;·&nbsp; <a href="/logs" style="color:#64748b">Auditoría</a></p>
 
   <div class="card">
     <div class="row">
@@ -127,6 +157,7 @@ PAGINA = """<!doctype html>
           <option value="email">Email</option>
           <option value="username">Usuario</option>
           <option value="phone">Telefono</option>
+          <option value="person">Nombre y apellido</option>
         </select>
       </div>
     </div>
@@ -276,6 +307,20 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         return False
 
+    def _usuario_actual(self) -> str:
+        hdr = self.headers.get("Authorization", "")
+        if hdr.startswith("Basic "):
+            try:
+                usuario, _, _ = base64.b64decode(hdr[6:]).decode("utf-8").partition(":")
+                return usuario or "?"
+            except Exception:
+                pass
+        return "(sin clave)"
+
+    def _origen(self) -> str:
+        # Detras del proxy de Render, la IP real viene en X-Forwarded-For.
+        return (self.headers.get("X-Forwarded-For") or self.address_string()).split(",")[0].strip()
+
     def do_GET(self):
         if not self._autorizado():
             self.send_response(401)
@@ -306,12 +351,43 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 reporte = asyncio.run(collectors.investigate(target, forzar_tipo=tipo))
+                registrar_auditoria(self._usuario_actual(),
+                                    reporte.get("tipo_detectado", tipo), target, self._origen())
                 self._json(reporte)
             except Exception as e:
                 self._json({"error": f"fallo la consulta: {e}"}, 500)
             return
 
+        if ruta == "/logs":
+            self._send(self._pagina_logs().encode("utf-8"), ctype="text/html; charset=utf-8")
+            return
+
         self._json({"error": "ruta no encontrada"}, 404)
+
+    def _pagina_logs(self) -> str:
+        with _db_lock:
+            filas = _db.execute(
+                "SELECT fecha_utc, usuario, tipo, dato, origen FROM auditoria "
+                "ORDER BY id DESC LIMIT 500").fetchall()
+        import html as _html
+        tr = "".join(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                *(_html.escape(str(c)) for c in f)) for f in filas)
+        return f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARGos - Auditoria</title><style>
+body{{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}}
+a{{color:#38bdf8}} h1{{font-size:20px}} .sub{{color:#94a3b8;font-size:13px}}
+table{{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}}
+th,td{{border:1px solid #334155;padding:6px 8px;text-align:left;vertical-align:top}}
+th{{background:#1e293b}} tr:nth-child(even){{background:#0b1220}}
+</style></head><body>
+<h1>ARGos — Registro de auditoría</h1>
+<p class="sub">Últimas 500 consultas (fecha en UTC). <a href="/">← Volver a ARGos</a></p>
+<table><tr><th>Fecha (UTC)</th><th>Usuario</th><th>Tipo</th><th>Dato consultado</th><th>Origen</th></tr>
+{tr or '<tr><td colspan="5">Sin registros todavía.</td></tr>'}</table>
+<p class="sub" style="margin-top:14px">Acceso restringido. Uso para rendición de cuentas; respeta la privacidad de los datos registrados.</p>
+</body></html>"""
 
     def log_message(self, fmt, *args):
         # Log compacto en la consola
