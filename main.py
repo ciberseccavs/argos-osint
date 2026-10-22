@@ -24,6 +24,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import collectors
 
+# Libreria de grafos (vis-network) servida por la propia app, para no depender
+# de un CDN externo (hay redes que los bloquean). El archivo va en el repo.
+_VIS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vis-network.min.js")
+try:
+    with open(_VIS_PATH, "rb") as _f:
+        VIS_JS = _f.read()
+except Exception:
+    VIS_JS = b""
+
 # En la nube (Render) estas variables llegan por el entorno.
 # HOST 0.0.0.0 es obligatorio para que el servidor sea accesible desde afuera.
 HOST = os.environ.get("HOST", "0.0.0.0")
@@ -144,7 +153,12 @@ PAGINA = """<!doctype html>
           box-shadow: 0 0 0 1px #334155; }
   .brand h1 { margin: 0; }
   .arg { color: #74acdf; }        /* celeste argentino */
+  #grafowrap { margin: 16px 0 4px; display:none; }
+  #grafowrap h3 { margin: 0 0 8px; font-size: 15px; color:#cbd5e1; }
+  #grafo { height: 420px; background:#0b1322; border:1px solid #334155; border-radius:12px; }
+  .grafo-nota { font-size:12px; color:#94a3b8; margin-top:6px; }
 </style>
+<script src="/vis-network.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -224,6 +238,11 @@ PAGINA = """<!doctype html>
       <button class="mini" onclick="descargarJSON()">⬇ Descargar (JSON)</button>
     </div>
     <div id="meta"></div>
+    <div id="grafowrap">
+      <h3>🕸️ Telaraña de vínculos</h3>
+      <div id="grafo"></div>
+      <div class="grafo-nota">Se arma solo con lo que esta consulta encontró en fuentes abiertas. Arrastrá los nodos para ordenarla; rueda del mouse para acercar.</div>
+    </div>
     <div class="res" id="res"></div>
   </div>
 </div>
@@ -297,6 +316,100 @@ function descargarJSON(){
   setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
 }
 
+function colorTipo(t){
+  const c = {phone:'#38bdf8', email:'#f59e0b', domain:'#34d399', ip:'#a78bfa',
+             cbu:'#f472b6', url:'#fb7185', person:'#facc15', username:'#22d3ee',
+             patente:'#fbbf24'};
+  return c[t] || '#cbd5e1';
+}
+
+let _redArgos = null;
+function construirGrafo(rep){
+  const wrap = document.getElementById('grafowrap');
+  const cont = document.getElementById('grafo');
+  if (!wrap || !cont) return;
+  if (typeof vis === 'undefined'){ wrap.style.display = 'none'; return; }
+
+  const nodes = [];
+  const edges = [];
+  let id = 1;
+  const centro = id;
+  nodes.push({id: centro, label: String(rep.entrada), shape:'ellipse',
+    color:{background: colorTipo(rep.tipo_detectado), border:'#0f172a'},
+    font:{color:'#0f172a', size:16}, margin:12});
+
+  function nodo(label, desde, etiqueta){
+    const nid = ++id;
+    nodes.push({id: nid, label: String(label), shape:'box',
+      color:{background:'#1e293b', border:'#475569'}, font:{color:'#e2e8f0', size:12},
+      margin:8});
+    edges.push({from: (desde||centro), to: nid, label: etiqueta||'',
+      color:{color:'#475569'}, font:{color:'#94a3b8', size:10}, length: etiqueta?170:140});
+    return nid;
+  }
+  function datos(sub){
+    for (const r of (rep.resultados||[])){
+      if (r.ok && (r.source||'').toLowerCase().indexOf(sub) >= 0) return r.data || {};
+    }
+    return {};
+  }
+
+  const t = rep.tipo_detectado;
+  if (t === 'phone'){
+    const d = datos('phonenumbers');
+    if (d.pais) nodo(d.pais, centro, 'país');
+    if (d.region_geografica) nodo(d.region_geografica, centro, 'región');
+    if (d.compania_asignada) nodo(d.compania_asignada, centro, 'compañía');
+    if (d.tipo_linea) nodo(d.tipo_linea, centro, 'línea');
+  } else if (t === 'email'){
+    const d = datos('email'); const g = datos('gravatar');
+    const dom = (String(rep.entrada).split('@')[1]) || '';
+    let hub = centro;
+    if (dom) hub = nodo(dom, centro, 'dominio');
+    if (d.puede_recibir_correo !== undefined) nodo(d.puede_recibir_correo ? 'Puede recibir correo (MX)' : 'Sin MX', hub);
+    if (d.dominio_descartable) nodo('Dominio descartable', hub);
+    if (d.dominio_creado) nodo('Registrado: ' + d.dominio_creado, hub);
+    if (g.existe_perfil_publico) nodo('Perfil público en Gravatar', centro);
+  } else if (t === 'domain'){
+    const dns = datos('dns'); const geo = datos('ipwho') || datos('ip-api'); const wb = datos('wayback');
+    (rep.ips_resueltas || []).slice(0,4).forEach(ip => nodo(ip, centro, 'IP'));
+    if (dns.NS) [].concat(dns.NS).slice(0,3).forEach(ns => nodo(ns, centro, 'NS'));
+    if (dns.MX) [].concat(dns.MX).slice(0,3).forEach(mx => nodo(mx, centro, 'MX'));
+    if (geo.org || geo.isp) nodo((geo.org || geo.isp) + (geo.country ? ' ('+geo.country+')' : ''), centro, 'proveedor');
+    if (wb.tiene_copias) nodo('Copias en archive.org (' + (wb.fecha_copia||'') + ')', centro, 'histórico');
+  } else if (t === 'ip'){
+    const geo = datos('ipwho') || datos('ip-api');
+    if (geo.country) nodo(geo.country + (geo.city ? ' / '+geo.city : ''), centro, 'ubicación');
+    if (geo.isp || geo.org) nodo(geo.isp || geo.org, centro, 'proveedor');
+    if (geo.as) nodo(geo.as, centro, 'AS');
+  } else if (t === 'cbu'){
+    const d = datos('cbu');
+    if (d.entidad) nodo(d.entidad, centro, 'entidad');
+    if (d.tipo) nodo(d.tipo, centro);
+    if (d.valido !== undefined) nodo(d.valido ? 'Válido' : 'No válido', centro);
+  } else if (t === 'url'){
+    const d = datos('link');
+    if (d.host) { const h = nodo(d.host, centro, 'host');
+      (d['señales_phishing'] || []).slice(0,4).forEach(s => nodo(s.length>40 ? s.slice(0,40)+'…' : s, h, 'señal')); }
+  } else if (t === 'patente'){
+    const d = datos('patente');
+    if (d.tipo_vehiculo) nodo(d.tipo_vehiculo, centro, 'vehículo');
+    if (d.epoca_aproximada) nodo(d.epoca_aproximada, centro, 'época');
+  } else {
+    nodo('Indicios (verificá vos con las ayudas de abajo)', centro);
+  }
+
+  if (nodes.length <= 1){ wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  if (_redArgos){ _redArgos.destroy(); _redArgos = null; }
+  _redArgos = new vis.Network(cont,
+    {nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges)},
+    { physics:{ stabilization:true, barnesHut:{ springLength:150, gravitationalConstant:-6000 } },
+      interaction:{ hover:true, dragNodes:true, zoomView:true },
+      nodes:{ borderWidth:1, shadow:false },
+      edges:{ smooth:{ type:'dynamic' }, arrows:{ to:{ enabled:false } } } });
+}
+
 function render(rep){
   window.ultimoReporte = rep;
   const meta = document.getElementById('meta');
@@ -333,6 +446,7 @@ function render(rep){
 
   document.getElementById('res').innerHTML = out.join('\\n');
   document.getElementById('salida').style.display = 'block';
+  try { construirGrafo(rep); } catch(e){ document.getElementById('grafowrap').style.display='none'; }
 }
 
 async function consultar(){
@@ -467,6 +581,10 @@ class Handler(BaseHTTPRequestHandler):
         if ruta == "/manifest.json":
             self._send(MANIFEST_JSON.encode("utf-8"), ctype="application/manifest+json; charset=utf-8")
             return
+        if ruta == "/vis-network.min.js":
+            self._send(VIS_JS, ctype="application/javascript; charset=utf-8")
+            return
+
         if ruta == "/sw.js":
             self._send(SW_JS.encode("utf-8"), ctype="application/javascript; charset=utf-8")
             return
