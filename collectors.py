@@ -104,6 +104,13 @@ def _looks_phone(value: str) -> bool:
     return s.isdigit() and 7 <= len(s) <= 15
 
 
+# Formatos de patente argentina (normalizados, sin espacios, en mayuscula)
+_RE_MERCOSUR_AUTO = re.compile(r"^[A-Z]{2}\d{3}[A-Z]{2}$")   # AB 123 CD  (2016+)
+_RE_MERCOSUR_MOTO = re.compile(r"^[A-Z]\d{3}[A-Z]{3}$")      # A 123 BCD  (2016+)
+_RE_VIEJO_AUTO = re.compile(r"^[A-Z]{3}\d{3}$")              # ABC 123    (1995-2016)
+_RE_VIEJO_MOTO = re.compile(r"^\d{3}[A-Z]{3}$")              # 123 ABC    (1995-2016)
+
+
 def detect_type(value: str) -> str:
     value = value.strip()
     # IPv4 / IPv6
@@ -122,6 +129,11 @@ def detect_type(value: str) -> str:
     # Link / URL completa (con esquema http(s):// o con ruta tras el dominio)
     if re.match(r"^https?://", value, re.I) or re.match(r"^[^\s/]+\.[^\s/]+/\S", value):
         return "url"
+    # Patente argentina (solo los formatos Mercosur, inequivocos; los viejos
+    # LLL123 / 123LLL se piden a mano por el menu para no pisar usuarios).
+    _pat = re.sub(r"[\s\-.]", "", value).upper()
+    if _RE_MERCOSUR_AUTO.match(_pat) or _RE_MERCOSUR_MOTO.match(_pat):
+        return "patente"
     # Telefono antes que dominio/usuario (numeros con + o 7-15 digitos)
     if _looks_phone(value):
         return "phone"
@@ -590,6 +602,41 @@ def cbu_info(value: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Patente de automotor (offline): identifica tipo y epoca por el formato.
+#   NO consulta el titular ni datos personales (ver nota: es dato protegido).
+# --------------------------------------------------------------------------- #
+def patente_info(value: str) -> dict:
+    raw = re.sub(r"[\s\-.]", "", value).upper()
+    if not re.match(r"^[A-Z0-9]{5,8}$", raw):
+        return {"source": "patente (offline)", "ok": False,
+                "error": "No parece una patente argentina (esperaba algo tipo AB123CD o ABC123)."}
+    if _RE_MERCOSUR_AUTO.match(raw):
+        tipo, epoca, formato = "Automovil (placa Mercosur)", "2016 en adelante", "AB 123 CD"
+    elif _RE_MERCOSUR_MOTO.match(raw):
+        tipo, epoca, formato = "Moto (placa Mercosur)", "2016 en adelante", "A 123 BCD"
+    elif _RE_VIEJO_AUTO.match(raw):
+        tipo, epoca, formato = "Automovil (placa anterior al Mercosur)", "1995-2016 aprox.", "ABC 123"
+    elif _RE_VIEJO_MOTO.match(raw):
+        tipo, epoca, formato = "Moto (placa anterior al Mercosur)", "1995-2016 aprox.", "123 ABC"
+    else:
+        tipo = "Formato no estandar (posible placa provincial anterior a 1995 o extranjera)"
+        epoca, formato = "indeterminada", "-"
+    data = {
+        "patente_normalizada": raw,
+        "tipo_vehiculo": tipo,
+        "epoca_aproximada": epoca,
+        "formato": formato,
+        "nota": ("El formato indica tipo y epoca del vehiculo. El TITULAR, la radicacion "
+                 "exacta y las afecciones (prenda, embargo, pedido de secuestro) NO son dato "
+                 "abierto: salen del Informe de Dominio del DNRPA, que tiene costo e identifica "
+                 "a quien lo solicita, y son dato personal protegido (Ley 25.326). La deuda de "
+                 "patente y las multas si se consultan gratis por dominio en los portales "
+                 "oficiales de mas abajo."),
+    }
+    return {"source": "patente (offline)", "ok": True, "data": data}
+
+
+# --------------------------------------------------------------------------- #
 # Analizador de links / URL (anti-phishing, offline)
 # --------------------------------------------------------------------------- #
 _SHORTENERS = {"bit.ly", "tinyurl.com", "cutt.ly", "goo.gl", "t.co", "ow.ly",
@@ -696,6 +743,10 @@ def google_dorks(value: str, tipo: str) -> dict:
         d["IP en reportes de abuso"] = _g(f'"{v}" (abuse OR blacklist OR malware)')
     elif tipo == "cbu":
         pass  # un CBU no se busca en Google
+    elif tipo == "patente":
+        pat = re.sub(r"[\s\-.]", "", v).upper()
+        d["La patente en Google (avisos y menciones)"] = _g(f'"{pat}"')
+        d["La patente en denuncias o reportes"] = _g(f'"{pat}" (robo OR estafa OR denuncia OR secuestro)')
     elif tipo == "url":
         host = urllib.parse.urlparse(v if re.match(r"^https?://", v, re.I) else "http://" + v).hostname or v
         d["El dominio en Google (reportes)"] = _g(f'"{host}" (estafa OR phishing OR fraude OR scam)')
@@ -723,6 +774,21 @@ def fuentes_oficiales(tipo: str, value: str) -> dict:
     # y situacion fiscal/crediticia. Verifica siempre que la direccion sea oficial.
     if tipo == "ip":
         return {}
+    if tipo == "patente":
+        return {
+            "Informe de Dominio del automotor (DNRPA) - titular, radicacion y afecciones (TRAMITE OFICIAL, CON COSTO E IDENTIFICACION)":
+                "https://www.argentina.gob.ar/solicitar-un-informe-de-dominio-del-automotor",
+            "Deuda de patente - Provincia de Buenos Aires (ARBA)": "https://www.arba.gov.ar",
+            "Deuda de patente e infracciones - CABA (AGIP / Gobierno de la Ciudad)": "https://www.agip.gob.ar",
+            "Infracciones de transito - CABA (buscar por dominio)": "https://www.buenosaires.gob.ar/infracciones",
+            "Infracciones de transito - Provincia de Buenos Aires": "https://www.gba.gob.ar",
+            "Antecedentes nacionales de transito (Agencia Nacional de Seguridad Vial)": "https://www.argentina.gob.ar/seguridadvial",
+            "nota": ("La DEUDA de patente y las MULTAS se consultan GRATIS y por dominio, cada una "
+                     "en su jurisdiccion (la provincia o el municipio donde esta radicado el auto; "
+                     "por eso conviene saber primero la radicacion). El TITULAR no es dato abierto: "
+                     "se obtiene con el Informe de Dominio oficial, que tiene costo e identifica a "
+                     "quien lo pide. Confirma siempre que la direccion sea el sitio oficial."),
+        }
     return {
         "Boletin Oficial de la Republica Argentina": "https://www.boletinoficial.gob.ar",
         "Normativa nacional (InfoLEG / argentina.gob.ar)": "https://www.argentina.gob.ar/normativa",
@@ -902,6 +968,26 @@ def cierre_investigacion(tipo: str, resultados: list[dict]) -> dict:
             decision = ("No transferir: el numero no es valido. Pedi que te lo confirmen bien "
                         "por un canal seguro.")
 
+    elif tipo == "patente":
+        d = _dato(resultados, "patente")
+        if d:
+            sostener.append(f"Patente {d.get('patente_normalizada')}: {d.get('tipo_vehiculo')}.")
+            sostener.append(f"Epoca aproximada del vehiculo: {d.get('epoca_aproximada')}.")
+            confianza = "Medio"
+        else:
+            sostener.append("El formato no coincide con una patente argentina estandar.")
+            confianza = "Bajo"
+        no_sabemos.append("El titular o propietario: no es dato abierto. Requiere el Informe de "
+                          "Dominio del DNRPA (con costo e identificacion) y es dato personal (Ley 25.326).")
+        no_sabemos.append("La radicacion exacta y las afecciones (prenda, embargo, pedido de "
+                          "secuestro): tambien salen del Informe de Dominio.")
+        no_sabemos.append("La deuda de patente y las multas: se consultan por dominio en los "
+                          "portales oficiales (gratis, pero cada una en su jurisdiccion).")
+        decision = ("Para deuda y multas, consulta por dominio en el portal oficial de la "
+                    "jurisdiccion (enlaces mas abajo). Para el titular o las afecciones, usa el "
+                    "Informe de Dominio oficial del DNRPA por la via correcta. No uses los datos "
+                    "del titular para perfilar: es dato personal protegido (Ley 25.326).")
+
     elif tipo == "url":
         d = _dato(resultados, "analisis de link")
         señ = d.get("señales_phishing", []) if d else []
@@ -975,6 +1061,8 @@ async def investigate(value: str, forzar_tipo: str | None = None) -> dict:
         reporte["resultados"] = [await asyncio.to_thread(phone_info, value)]
     elif tipo == "cbu":
         reporte["resultados"] = [cbu_info(value)]
+    elif tipo == "patente":
+        reporte["resultados"] = [patente_info(value)]
     elif tipo == "url":
         reporte["resultados"] = [analyze_url(value)]
     elif tipo == "person":
